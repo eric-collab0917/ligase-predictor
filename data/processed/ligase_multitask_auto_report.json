@@ -1,0 +1,37 @@
+{
+  "n_rows": 2776,
+  "n_with_ec": 2766,
+  "n_with_substrate": 1626,
+  "n_with_metal": 235,
+  "ec_distribution": {
+    "6.3": 1858,
+    "6.1": 378,
+    "6.2": 351,
+    "6.5": 112,
+    "6.4": 56,
+    "6.6": 11
+  },
+  "substrate_distribution": {
+    "cofactor_attachment": 1205,
+    "peptide_or_protein_ligation": 653,
+    "lipid_or_fatty_acid": 216,
+    "glycan_or_polysaccharide": 155,
+    "DNA_ligation": 120,
+    "RNA_ligation": 68,
+    "ubiquitin_like_ligation": 44,
+    "glutathione_related": 35,
+    "phospholipid_related": 28,
+    "aminoacyl_tRNA": 23
+  },
+  "metal_distribution": {
+    "Mg2+": 129,
+    "Mn2+": 116,
+    "Zn2+": 82,
+    "K+": 9,
+    "Ca2+": 4,
+    "Ni2+": 4,
+    "Co2+": 3,
+    "Cu2+": 2,
+    "Fe3+": 2
+  }
+}

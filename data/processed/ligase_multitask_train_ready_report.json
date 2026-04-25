@@ -1,0 +1,73 @@
+{
+  "n_rows": 2776,
+  "substrate": {
+    "kept_labels": [
+      "NONE",
+      "cofactor_attachment",
+      "peptide_or_protein_ligation",
+      "lipid_or_fatty_acid",
+      "glycan_or_polysaccharide",
+      "DNA_ligation",
+      "RNA_ligation",
+      "ubiquitin_like_ligation",
+      "glutathione_related",
+      "phospholipid_related",
+      "aminoacyl_tRNA"
+    ],
+    "before_counts": {
+      "cofactor_attachment": 1205,
+      "peptide_or_protein_ligation": 653,
+      "lipid_or_fatty_acid": 216,
+      "glycan_or_polysaccharide": 155,
+      "DNA_ligation": 120,
+      "RNA_ligation": 68,
+      "ubiquitin_like_ligation": 44,
+      "glutathione_related": 35,
+      "phospholipid_related": 28,
+      "aminoacyl_tRNA": 23
+    },
+    "after_counts": {
+      "cofactor_attachment": 1205,
+      "peptide_or_protein_ligation": 653,
+      "lipid_or_fatty_acid": 216,
+      "glycan_or_polysaccharide": 155,
+      "DNA_ligation": 120,
+      "RNA_ligation": 68,
+      "ubiquitin_like_ligation": 44,
+      "glutathione_related": 35,
+      "phospholipid_related": 28,
+      "aminoacyl_tRNA": 23
+    },
+    "fill_empty_none": false,
+    "rare_to_other": true
+  },
+  "metal": {
+    "kept_labels": [
+      "NONE",
+      "Mg2+",
+      "Mn2+",
+      "Zn2+",
+      "K+"
+    ],
+    "before_counts": {
+      "Mg2+": 129,
+      "Mn2+": 116,
+      "Zn2+": 82,
+      "K+": 9,
+      "Ca2+": 4,
+      "Ni2+": 4,
+      "Co2+": 3,
+      "Cu2+": 2,
+      "Fe3+": 2
+    },
+    "after_counts": {
+      "Mg2+": 129,
+      "Mn2+": 116,
+      "Zn2+": 82,
+      "OTHER": 10,
+      "K+": 9
+    },
+    "fill_empty_none": false,
+    "rare_to_other": true
+  }
+}

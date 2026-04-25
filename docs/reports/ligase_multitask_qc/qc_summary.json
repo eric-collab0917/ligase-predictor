@@ -1,0 +1,24 @@
+{
+  "n_rows": 2776,
+  "sequence_length": {
+    "min": 84,
+    "p25": 480.75,
+    "median": 546.0,
+    "p75": 766.25,
+    "max": 15281,
+    "mean": 810.4009365994236
+  },
+  "missing_rate": {
+    "ec_subclass": 0.0036023054755043226,
+    "substrate_labels": 0.4142651296829971,
+    "metal_labels": 0.9153458213256485
+  },
+  "ec_invalid_format_count": 0,
+  "n_ec_classes": 6,
+  "n_substrate_classes": 10,
+  "n_metal_classes": 9,
+  "n_duplicate_sequences": 0,
+  "n_duplicate_ids": 0,
+  "n_conflicts": 0,
+  "n_suspicious_variants": 0
+}

@@ -1,0 +1,3 @@
+id,accession,sequence,ec_subclass,substrate_labels,metal_labels,notes
+,P12345,,6.5,DNA_ligation,Mg2+,fix from literature
+entry_name,,MTEITAAMVKELRESTGAGMMDCKNALSETNGDFDKAVQLLREKGLGKAAKKADRLAAEGLVSVKVSDDFTIAAMRPSYLSPIWLIEPRQTEGVAEIQDPEVFTENPFPKSGIQAFK,6.3,peptide_or_protein_ligation,NONE,manual curated
