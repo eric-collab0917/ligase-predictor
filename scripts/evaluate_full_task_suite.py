@@ -512,24 +512,24 @@ def main():
 
     ap.add_argument(
         "--cofactor-model",
-        default=str((cwd / "legacy" / "experiments" / "atp_nad" / "best_cofactor_model.pth").resolve()),
+        default=str((cwd / "models" / "checkpoints" / "best_cofactor_model.pth").resolve()),
     )
     ap.add_argument(
         "--cofactor-atp",
-        default=str((cwd / "legacy" / "experiments" / "atp_nad" / "atp_ligase.fasta").resolve()),
+        default=str((cwd / "data" / "raw" / "atp_ligase.fasta").resolve()),
     )
     ap.add_argument(
         "--cofactor-nad",
-        default=str((cwd / "legacy" / "experiments" / "atp_nad" / "nad_ligase.fasta").resolve()),
+        default=str((cwd / "data" / "raw" / "nad_ligase.fasta").resolve()),
     )
 
     ap.add_argument(
         "--sol-model",
-        default=str((cwd / "legacy" / "experiments" / "solubility" / "best_solubility_model.pth").resolve()),
+        default=str((cwd / "models" / "checkpoints" / "best_solubility_model.pth").resolve()),
     )
     ap.add_argument(
         "--sol-csv",
-        default=str((cwd / "legacy" / "experiments" / "solubility" / "solubility_data.csv").resolve()),
+        default=str((cwd / "data" / "raw" / "solubility_data.csv").resolve()),
     )
 
     ap.add_argument(

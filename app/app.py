@@ -622,24 +622,23 @@ def main():
     )
 
     cwd = REPO_ROOT
+    expected_model_path = str(cwd / "outputs" / "kcat_blend" / "blend" / "blend_model.json")
+    expected_cache_path = str(cwd / "data" / "interim" / "feat_cache.npz")
     default_model = first_existing(
-        str(cwd / "outputs" / "kcat_blend" / "blend" / "blend_model.json"),
-    )
+        expected_model_path,
+    ) or expected_model_path
     default_cache = first_existing(
-        str(cwd / "data" / "interim" / "feat_cache.npz"),
+        expected_cache_path,
         str(cwd / "feat_cache.npz"),
-    )
+    ) or expected_cache_path
     default_ligase = first_existing(
         str(cwd / "models" / "checkpoints" / "best_ligase_model.pth"),
-        str(cwd / "legacy" / "experiments" / "kcat" / "best_ligase_model.pth"),
     )
     default_sol = first_existing(
-        str(cwd / "legacy" / "experiments" / "solubility" / "best_solubility_model.pth"),
-        str(cwd / "legacy" / "experiments" / "kcat" / "best_solubility_model.pth"),
+        str(cwd / "models" / "checkpoints" / "best_solubility_model.pth"),
     )
     default_cofactor = first_existing(
-        str(cwd / "legacy" / "experiments" / "atp_nad" / "best_cofactor_model.pth"),
-        str(cwd / "legacy" / "experiments" / "kcat" / "best_cofactor_model.pth"),
+        str(cwd / "models" / "checkpoints" / "best_cofactor_model.pth"),
     )
     ligase_multitask_ckpt_v3_1 = first_existing(
         str(cwd / "outputs" / "ligase_multitask_v3_1" / "best_ligase_multitask.pt"),
@@ -678,6 +677,10 @@ def main():
             value=default_cache,
             help="推荐填 feat_cache.npz 以对齐训练分布。",
         )
+        if model_path and (not os.path.exists(model_path)):
+            st.caption("Model path does not exist yet. Please provide a valid blend_model.json/full_model.joblib.")
+        if feature_cache and (not os.path.exists(feature_cache)):
+            st.caption("Feature cache not found. You can leave it empty, but topology priors will use fallback values.")
         esm_model_name = st.text_input("ESM Model", value="facebook/esm2_t12_35M_UR50D")
         device_arg = st.selectbox("Device", options=["auto", "mps", "cpu"], index=0)
         st.markdown('<div class="small-note">首次加载 ESM 可能较慢，后续会走缓存。</div>', unsafe_allow_html=True)

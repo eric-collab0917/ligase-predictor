@@ -284,7 +284,12 @@ def _relocate_old_outputs_path(path_str: str, project_root: Path):
 def resolve_path(path_str: str, base_dir: str):
     p = Path(path_str)
     base = Path(base_dir).resolve()
-    project_root = base.parent
+    # `blend_model.json` may store component paths as:
+    # 1) absolute paths
+    # 2) relative to blend dir (e.g., ../lgbm/full_model.joblib)
+    # 3) relative to repo root (e.g., outputs/kcat_blend/lgbm/full_model.joblib)
+    # Try common anchors in order and pick the first existing path.
+    project_root = Path.cwd().resolve()
 
     if p.is_absolute():
         if p.exists():
@@ -294,10 +299,18 @@ def resolve_path(path_str: str, base_dir: str):
             return relocated
         return str(p)
 
-    rel = (base / p).resolve()
-    if rel.exists():
-        return str(rel)
-    return str(rel)
+    candidates = [
+        (base / p).resolve(),
+        (base.parent / p).resolve(),
+        (base.parent.parent / p).resolve(),
+        (project_root / p).resolve(),
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    # Fallback: keep previous behavior for debuggability.
+    return str((base / p).resolve())
 
 
 def predict_with_joblib(feature_vec: np.ndarray, artifact_path: str):
