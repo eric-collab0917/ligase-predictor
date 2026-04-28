@@ -1,0 +1,8 @@
+{
+  "eval_dir": "outputs/full_task_eval_v1",
+  "blend_dir": "outputs/kcat_blend",
+  "ligase_train_dir": "outputs/ligase_multitask_v3_1",
+  "out_dir": "reports/ggplot2",
+  "generated": [true, true, true, true],
+  "generated_at": "2026-04-25 20:27:11"
+}

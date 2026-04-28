@@ -1,0 +1,25 @@
+{
+  "n_rows": 158,
+  "n_with_ph": 136,
+  "n_with_temp": 71,
+  "n_with_both": 49,
+  "ph_stats": {
+    "mean": 7.95,
+    "std": 0.78,
+    "min": 5.5,
+    "max": 10.0
+  },
+  "temp_stats": {
+    "mean": 59.4,
+    "std": 22.6,
+    "min": 25.0,
+    "max": 105.0
+  },
+  "ec_distribution": {
+    "6.3": 78,
+    "6.2": 41,
+    "6.5": 20,
+    "6.4": 13,
+    "6.1": 6
+  }
+}

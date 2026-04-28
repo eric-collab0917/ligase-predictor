@@ -31,15 +31,22 @@ from scripts.predict_kcat_from_sequence import (
     sequence_to_feature,
 )
 from src.ligase_multitask import LigaseMultiTaskModel, unpack_multitask_outputs
+from src.ligase_ph_temp import LigasePhTempModel
+from src.ligase_subcellular import LigaseSubcellularModel
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
 
 
 class EsmBinaryClassifier(nn.Module):
     def __init__(self, model_name="facebook/esm2_t6_8M_UR50D"):
         super().__init__()
-        self.esm = EsmModel.from_pretrained(model_name)
+        try:
+            self.esm = EsmModel.from_pretrained(model_name, local_files_only=True)
+        except Exception:
+            self.esm = EsmModel.from_pretrained(model_name)
         hidden_size = 320
         self.classifier = nn.Sequential(
             nn.Linear(hidden_size, 128),
@@ -198,6 +205,147 @@ def load_ligase_multitask_runtime(device_arg, checkpoint_path):
     }
 
 
+@st.cache_resource(show_spinner=False)
+def load_ph_temp_runtime(device_arg, checkpoint_path):
+    """Load pH/temperature prediction model."""
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        return None
+
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    cfg = ckpt.get("config", {})
+
+    model_name = cfg.get("model_name", "facebook/esm2_t6_8M_UR50D")
+    max_length = int(cfg.get("max_length", 512))
+    dropout = float(cfg.get("dropout", 0.2))
+    hidden_dim = int(cfg.get("hidden_dim", 128))
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    device = get_device(device_arg)
+    model = LigasePhTempModel(
+        model_name=model_name,
+        dropout=dropout,
+        freeze_backbone=True,
+        unfreeze_last_n_layers=0,
+        hidden_dim=hidden_dim,
+        num_ph_bins=int(cfg.get("ph_num_bins", 0)),
+    )
+    model.load_state_dict(ckpt["model_state"], strict=False)
+    model.to(device).eval()
+
+    return {
+        "device": device,
+        "tokenizer": tokenizer,
+        "model": model,
+        "max_length": max_length,
+        "best_metrics": ckpt.get("best_metrics", {}),
+    }
+
+
+@st.cache_resource(show_spinner=False)
+def load_subcellular_runtime(device_arg, checkpoint_path):
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        return None
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    cfg = ckpt.get("config", {})
+    maps = ckpt.get("label_maps", {})
+    sub_to_idx = maps.get("subcellular_to_idx", {})
+    if len(sub_to_idx) == 0:
+        return None
+    id2label = [x for x, _ in sorted(sub_to_idx.items(), key=lambda kv: kv[1])]
+
+    model_name = cfg.get("model_name", "facebook/esm2_t6_8M_UR50D")
+    max_length = int(cfg.get("max_length", 512))
+    dropout = float(cfg.get("dropout", 0.2))
+    hidden_dim = int(cfg.get("hidden_dim", 128))
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    device = get_device(device_arg)
+    model = LigaseSubcellularModel(
+        model_name=model_name,
+        num_subcellular=len(id2label),
+        dropout=dropout,
+        freeze_backbone=True,
+        unfreeze_last_n_layers=0,
+        hidden_dim=hidden_dim,
+    )
+    model.load_state_dict(ckpt["model_state"], strict=False)
+    model.to(device).eval()
+
+    return {
+        "device": device,
+        "tokenizer": tokenizer,
+        "model": model,
+        "max_length": max_length,
+        "id2label": id2label,
+        "threshold": float(cfg.get("threshold", 0.5)),
+    }
+
+
+@torch.no_grad()
+def predict_subcellular(sequence, runtime, threshold=None):
+    seq = clean_sequence(sequence)
+    tokenizer = runtime["tokenizer"]
+    model = runtime["model"]
+    device = runtime["device"]
+    max_length = runtime["max_length"]
+    id2label = runtime["id2label"]
+    thr = threshold if threshold is not None else runtime["threshold"]
+
+    enc = tokenizer(seq, truncation=True, padding=True, max_length=max_length, return_tensors="pt")
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc["attention_mask"].to(device)
+
+    logits = model(input_ids, attention_mask)
+    probs = torch.sigmoid(logits)[0].cpu().numpy()
+
+    preds = []
+    for j, p in enumerate(probs):
+        if p >= thr:
+            preds.append((id2label[j], float(p)))
+    if len(preds) == 0 and len(id2label) > 0:
+        j = int(np.argmax(probs))
+        preds = [(id2label[j], float(probs[j]))]
+
+    return {
+        "subcellular_pred": preds,
+    }
+
+
+@torch.no_grad()
+def predict_ph_temp(sequence, runtime):
+    """Predict optimal pH and temperature for a sequence."""
+    seq = clean_sequence(sequence)
+    tokenizer = runtime["tokenizer"]
+    model = runtime["model"]
+    device = runtime["device"]
+    max_length = runtime["max_length"]
+
+    enc = tokenizer(seq, truncation=True, padding=True, max_length=max_length, return_tensors="pt")
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc["attention_mask"].to(device)
+
+    ph_pred, temp_pred = model(input_ids, attention_mask)
+    ph_val = float(ph_pred[0].cpu().item())
+    temp_val = float(temp_pred[0].cpu().item())
+
+    # Clamp to reasonable ranges
+    ph_val = max(0.0, min(14.0, ph_val))
+    temp_val = max(0.0, min(120.0, temp_val))
+
+    return {
+        "opt_ph": round(ph_val, 2),
+        "opt_temp": round(temp_val, 1),
+    }
+
+
 def _topk_with_probs(probs, labels, k=3):
     if len(labels) == 0:
         return []
@@ -310,7 +458,10 @@ def _fmt_label_probs(items, max_items=3):
 @st.cache_resource(show_spinner=False)
 def load_legacy_runtime(device_arg, sol_path, ligase_path, cofactor_path):
     device = get_device(device_arg)
-    tok_8m = AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
+    try:
+        tok_8m = AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D", local_files_only=True)
+    except Exception:
+        tok_8m = AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
 
     model_sol = None
     model_ligase = None
@@ -371,28 +522,134 @@ def predict_legacy_suite(sequence, runtime):
     return res
 
 
+def _scale_log_kcat_for_radar(blend_log_kcat):
+    if not np.isfinite(blend_log_kcat):
+        return 0.0
+    # Map a typical log_kcat band into [0, 1] for display only.
+    return float(np.clip((blend_log_kcat + 2.0) / 4.0, 0.05, 0.99))
+
+
 def render_radar(legacy, blend_log_kcat):
     ligase = 0.0 if not np.isfinite(legacy["ligase_prob"]) else float(legacy["ligase_prob"])
     sol = 0.0 if not np.isfinite(legacy["solubility_prob"]) else float(legacy["solubility_prob"])
-    if np.isfinite(blend_log_kcat):
-        kcat_scaled = float(np.clip((blend_log_kcat + 2.0) / 4.0, 0.05, 0.99))
-    else:
-        kcat_scaled = 0.0
+    kcat_scaled = _scale_log_kcat_for_radar(blend_log_kcat)
+    cofactor_conf = 0.0
+    if np.isfinite(legacy.get("atp_prob", np.nan)) and np.isfinite(legacy.get("nad_prob", np.nan)):
+        cofactor_conf = float(max(legacy["atp_prob"], legacy["nad_prob"]))
 
-    categories = ["Ligase", "Solubility", "Kinetics", "Expressibility", "Confidence"]
-    values = [ligase, sol, kcat_scaled, 0.9 * sol if sol > 0 else 0.0, max(ligase, sol, kcat_scaled)]
+    categories = [
+        "Ligase",
+        "Solubility",
+        "Cofactor",
+        f"log_kcat\n({blend_log_kcat:.2f})" if np.isfinite(blend_log_kcat) else "log_kcat",
+    ]
+    values = [ligase, sol, cofactor_conf, kcat_scaled]
     angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
     values += values[:1]
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(4.3, 4.3), subplot_kw=dict(polar=True))
-    ax.fill(angles, values, color="#f59e0b", alpha=0.28)
-    ax.plot(angles, values, color="#f97316", linewidth=2)
+    fig, ax = plt.subplots(figsize=(5.0, 4.6), subplot_kw=dict(polar=True))
+    ax.fill(angles, values, color="#f59e0b", alpha=0.24)
+    ax.plot(angles, values, color="#f97316", linewidth=2.2)
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(categories, fontsize=9)
-    ax.set_yticklabels([])
+    ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+    ax.set_yticklabels(["0.2", "0.4", "0.6", "0.8", "1.0"], fontsize=8, color="#6b7280")
     ax.set_ylim(0, 1.0)
+    ax.grid(color="#d1d5db", alpha=0.8, linewidth=0.8)
+    ax.spines["polar"].set_color("#9ca3af")
+    ax.spines["polar"].set_linewidth(1.0)
     return fig
+
+
+def _ph_band(ph_value):
+    if ph_value is None or not np.isfinite(ph_value):
+        return "Unknown"
+    if ph_value < 6.0:
+        return "Acidic"
+    if ph_value <= 8.5:
+        return "Near-neutral"
+    return "Alkaline"
+
+
+def _temp_band(temp_value):
+    if temp_value is None or not np.isfinite(temp_value):
+        return "Unknown"
+    if temp_value < 25:
+        return "Low-temp"
+    if temp_value < 50:
+        return "Mesophilic"
+    if temp_value < 70:
+        return "Warm-active"
+    return "Thermophilic"
+
+
+def _condition_gauge_card(label, value_text, band_text, gauge_ratio, gauge_color, scale_left, scale_right, unit_text):
+    angle = float(np.clip(gauge_ratio, 0.0, 1.0)) * 180.0
+    return f"""
+        <div class="condition-card">
+          <div class="condition-label">{label}</div>
+          <div class="gauge-shell">
+            <div class="gauge-arc" style="--gauge-color:{gauge_color}; --gauge-angle:{angle:.1f}deg;">
+              <div class="gauge-inner"></div>
+              <div class="gauge-center">
+                <div class="gauge-number">{value_text}</div>
+                <div class="gauge-unit">{unit_text}</div>
+              </div>
+            </div>
+            <div class="gauge-scale">
+              <span>{scale_left}</span>
+              <span>{scale_right}</span>
+            </div>
+          </div>
+          <div class="condition-tag">{band_text}</div>
+        </div>
+    """
+
+
+def render_condition_panel(ph_temp_pred):
+    if not ph_temp_pred:
+        st.info("未加载 pH/Temperature 模型，条件面板暂不可用。")
+        return
+
+    ph_value = ph_temp_pred.get("opt_ph")
+    temp_value = ph_temp_pred.get("opt_temp")
+    ph_ratio = 0.0 if ph_value is None or not np.isfinite(ph_value) else float(np.clip(ph_value / 14.0, 0.0, 1.0))
+    temp_ratio = 0.0 if temp_value is None or not np.isfinite(temp_value) else float(np.clip(temp_value / 100.0, 0.0, 1.0))
+
+    ph_card = _condition_gauge_card(
+        label="Optimal pH",
+        value_text=f"{ph_value:.1f}",
+        band_text=_ph_band(ph_value),
+        gauge_ratio=ph_ratio,
+        gauge_color="#f97316",
+        scale_left="0",
+        scale_right="14",
+        unit_text="pH",
+    )
+    temp_card = _condition_gauge_card(
+        label="Optimal Temperature",
+        value_text=f"{temp_value:.0f}",
+        band_text=_temp_band(temp_value),
+        gauge_ratio=temp_ratio,
+        gauge_color="#2563eb",
+        scale_left="0°C",
+        scale_right="100°C",
+        unit_text="°C",
+    )
+
+    st.markdown(
+        f"""
+        <div class="condition-panel">
+          <div class="condition-head">Reaction Condition Window</div>
+          <div class="condition-grid">
+            {ph_card}
+            {temp_card}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def rows_to_csv(rows):
@@ -596,6 +853,112 @@ def add_style():
             color: #4b5563;
             font-size: 0.86rem;
           }
+          .condition-panel {
+            margin-top: 10px;
+            padding: 14px 16px;
+            background: rgba(255,255,255,0.82);
+            border: 1px solid rgba(31, 41, 55, 0.08);
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+          }
+          .condition-head {
+            font-size: 0.98rem;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 10px;
+          }
+          .condition-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+          }
+          .condition-card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(248,250,252,0.92));
+            border: 1px solid rgba(31, 41, 55, 0.06);
+            border-radius: 14px;
+            padding: 12px 13px;
+          }
+          .condition-label {
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-bottom: 5px;
+          }
+          .condition-value {
+            font-size: 1.22rem;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 6px;
+          }
+          .condition-tag {
+            display: inline-block;
+            font-size: 0.78rem;
+            color: #374151;
+            background: #f3f4f6;
+            border-radius: 999px;
+            padding: 3px 9px;
+            margin-top: 6px;
+          }
+          .gauge-shell {
+            width: 100%;
+            max-width: 210px;
+            margin: 6px auto 0 auto;
+          }
+          .gauge-arc {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 2 / 1;
+            overflow: hidden;
+          }
+          .gauge-arc::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 999px 999px 0 0;
+            background:
+              conic-gradient(
+                from 180deg,
+                var(--gauge-color) 0deg,
+                var(--gauge-color) var(--gauge-angle),
+                #e5e7eb var(--gauge-angle),
+                #e5e7eb 180deg,
+                transparent 180deg
+              );
+          }
+          .gauge-inner {
+            position: absolute;
+            left: 16px;
+            right: 16px;
+            top: 16px;
+            bottom: -2px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            border-radius: 999px 999px 0 0;
+          }
+          .gauge-center {
+            position: absolute;
+            left: 50%;
+            bottom: 8px;
+            transform: translateX(-50%);
+            text-align: center;
+          }
+          .gauge-number {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #111827;
+            line-height: 1.1;
+          }
+          .gauge-unit {
+            font-size: 0.76rem;
+            color: #6b7280;
+            margin-top: 2px;
+          }
+          .gauge-scale {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.76rem;
+            color: #6b7280;
+            margin-top: 6px;
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -615,7 +978,7 @@ def main():
         """
         <div class="hero">
           <h1>Enzyme Catalytic Activity Predictor</h1>
-          <p>输入序列、FASTA 或 PDB，输出 <b>log_kcat</b> 与 <b>kcat</b> 预测；并支持连接酶鉴定、ATP/NAD 偏好、水溶性、多任务综合分析。</p>
+          <p>输入序列、FASTA 或 PDB，输出 <b>log_kcat</b> 与 <b>kcat</b> 预测；并支持连接酶鉴定、ATP/NAD 偏好、水溶性、<b>最适 pH/温度</b>、<b>亚细胞定位</b>、多任务综合分析。</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -658,6 +1021,37 @@ def main():
         ligase_multitask_ckpt_v2,
         ligase_multitask_ckpt_v1,
     )
+
+    # pH/Temperature model checkpoints - prefer current best pH-focused model
+    ph_temp_ckpt_v3b = first_existing(
+        str(cwd / "outputs" / "ligase_ph_temp_v3b" / "best_ligase_ph_temp.pt"),
+    )
+    ph_temp_ckpt_v2 = first_existing(
+        str(cwd / "outputs" / "ligase_ph_temp_v2" / "best_ligase_ph_temp.pt"),
+    )
+    ph_temp_ckpt_finetuned = first_existing(
+        str(cwd / "outputs" / "ligase_ph_temp_finetuned" / "best_ligase_ph_temp.pt"),
+    )
+    ph_temp_ckpt_v1 = first_existing(
+        str(cwd / "outputs" / "ligase_ph_temp_v1" / "best_ligase_ph_temp.pt"),
+    )
+    ph_temp_ckpt_all = first_existing(
+        str(cwd / "outputs" / "enzyme_ph_temp_all_v1" / "best_ligase_ph_temp.pt"),
+    )
+    ph_temp_ckpt = first_existing(
+        ph_temp_ckpt_v3b,
+        ph_temp_ckpt_v2,
+        ph_temp_ckpt_finetuned,
+        str(cwd / "outputs" / "ligase_ph_temp" / "best_ligase_ph_temp.pt"),
+        ph_temp_ckpt_v1,
+        ph_temp_ckpt_all,
+    )
+
+    subcellular_ckpt_v1 = first_existing(
+        str(cwd / "outputs" / "ligase_subcellular_v1" / "best_ligase_subcellular.pt"),
+    )
+    default_subcellular_ckpt = subcellular_ckpt_v1
+    subcellular_ckpt_path = default_subcellular_ckpt or ""
 
     with st.sidebar:
         st.markdown(
@@ -761,6 +1155,95 @@ def main():
                     value=float(np.clip(ckpt_meta["metal_presence_threshold"], 0.30, 0.90)),
                     step=0.05,
                 )
+        with st.expander("pH/Temperature Prediction Model", expanded=False):
+            # Version selection for pH/Temp model
+            ph_temp_versions = {}
+            if ph_temp_ckpt_v3b:
+                ph_temp_versions["v3b (Current Best pH-focused)"] = ph_temp_ckpt_v3b
+            if ph_temp_ckpt_v2:
+                ph_temp_versions["v2 (pH-focused)"] = ph_temp_ckpt_v2
+            if ph_temp_ckpt_finetuned:
+                ph_temp_versions["Finetuned (Legacy Best Temp-balanced)"] = ph_temp_ckpt_finetuned
+            if ph_temp_ckpt_v1:
+                ph_temp_versions["Ligase-only v1"] = ph_temp_ckpt_v1
+            if ph_temp_ckpt_all:
+                ph_temp_versions["All Enzymes"] = ph_temp_ckpt_all
+            ph_temp_version_options = list(ph_temp_versions.keys()) + ["Custom"]
+
+            default_ph_temp_version = "Custom"
+            if ph_temp_ckpt_v3b:
+                default_ph_temp_version = "v3b (Current Best pH-focused)"
+            elif ph_temp_ckpt_v2:
+                default_ph_temp_version = "v2 (pH-focused)"
+            elif ph_temp_ckpt_finetuned:
+                default_ph_temp_version = "Finetuned (Legacy Best Temp-balanced)"
+            elif ph_temp_ckpt_v1:
+                default_ph_temp_version = "Ligase-only v1"
+            elif ph_temp_ckpt_all:
+                default_ph_temp_version = "All Enzymes"
+
+            selected_ph_temp_version = st.selectbox(
+                "pH/Temp Model Version",
+                options=ph_temp_version_options,
+                index=ph_temp_version_options.index(default_ph_temp_version) if default_ph_temp_version in ph_temp_version_options else 0,
+            )
+
+            if selected_ph_temp_version == "Custom":
+                ph_temp_ckpt_path = st.text_input(
+                    "pH/Temp Checkpoint (Custom)",
+                    value=ph_temp_ckpt,
+                    help="Path to best_ligase_ph_temp.pt checkpoint",
+                )
+            else:
+                ph_temp_ckpt_path = ph_temp_versions.get(selected_ph_temp_version, "")
+                st.text_input("pH/Temp Checkpoint", value=ph_temp_ckpt_path, disabled=True)
+
+            if ph_temp_ckpt_path and os.path.exists(ph_temp_ckpt_path):
+                st.caption("✓ pH/Temperature model loaded")
+                # Show model info
+                if "v3b" in selected_ph_temp_version:
+                    st.caption("📊 Current best pH-focused model: cleaned labels + reweighting + pH auxiliary bins")
+                elif "v2" in selected_ph_temp_version:
+                    st.caption("📊 pH-focused model: cleaned labels + reweighting + pH auxiliary bins")
+                elif "Finetuned" in selected_ph_temp_version:
+                    st.caption("📊 Two-stage model: pretrained on 5276 enzymes, finetuned on 158 ligases")
+                elif "All Enzymes" in selected_ph_temp_version:
+                    st.caption("📊 Trained on 5276 enzyme sequences")
+                elif "Ligase-only" in selected_ph_temp_version:
+                    st.caption("📊 Trained on 158 ligase sequences only")
+            else:
+                st.caption("⚠ pH/Temperature model not found (optional)")
+
+        with st.expander("Subcellular Localization Model (亚细胞定位)", expanded=False):
+            subcellular_versions = {}
+            if subcellular_ckpt_v1:
+                subcellular_versions["v1 (Ligase)"] = subcellular_ckpt_v1
+            subcellular_version_options = list(subcellular_versions.keys()) + ["Custom"]
+
+            default_subcellular_version = "Custom"
+            if subcellular_ckpt_v1:
+                default_subcellular_version = "v1 (Ligase)"
+
+            selected_subcellular_version = st.selectbox(
+                "Subcellular Model Version",
+                options=subcellular_version_options,
+                index=subcellular_version_options.index(default_subcellular_version) if default_subcellular_version in subcellular_version_options else 0,
+            )
+
+            if selected_subcellular_version == "Custom":
+                subcellular_ckpt_path = st.text_input(
+                    "Subcellular Checkpoint (Custom)",
+                    value=default_subcellular_ckpt or "",
+                    help="Path to best_ligase_subcellular.pt checkpoint",
+                )
+            else:
+                subcellular_ckpt_path = subcellular_versions.get(selected_subcellular_version, "")
+                st.text_input("Subcellular Checkpoint", value=subcellular_ckpt_path, disabled=True)
+
+            if subcellular_ckpt_path and os.path.exists(subcellular_ckpt_path):
+                st.caption("✓ Subcellular localization model loaded")
+            else:
+                st.caption("⚠ Subcellular model not found (optional)")
 
     tab0, tab1, tab2, tab3 = st.tabs(["Integrated Lab", "Single Sequence", "FASTA Batch", "PDB"])
 
@@ -811,6 +1294,22 @@ def main():
                                 metal_presence_threshold=ligase_metal_presence_threshold,
                             )
 
+                # pH/Temperature prediction
+                ph_temp_pred = None
+                if ph_temp_ckpt_path and os.path.exists(ph_temp_ckpt_path):
+                    with st.spinner("Running pH/Temperature prediction..."):
+                        ph_temp_runtime = load_ph_temp_runtime(device_arg, ph_temp_ckpt_path)
+                        if ph_temp_runtime is not None:
+                            ph_temp_pred = predict_ph_temp(seq_clean, ph_temp_runtime)
+
+                # Subcellular localization prediction
+                subcellular_pred = None
+                if subcellular_ckpt_path and os.path.exists(subcellular_ckpt_path):
+                    with st.spinner("Running subcellular localization prediction..."):
+                        subcellular_runtime = load_subcellular_runtime(device_arg, subcellular_ckpt_path)
+                        if subcellular_runtime is not None:
+                            subcellular_pred = predict_subcellular(seq_clean, subcellular_runtime)
+
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     v = legacy["ligase_prob"]
@@ -822,6 +1321,19 @@ def main():
                     st.metric("辅酶偏好", legacy["cofactor_type"])
                 with col4:
                     st.metric("新版 blend log_kcat", f"{blend_log_kcat:.3f}")
+
+                # pH/Temperature results row
+                if ph_temp_pred is not None:
+                    col_ph, col_temp, col_empty1, col_empty2 = st.columns(4)
+                    with col_ph:
+                        st.metric("最适 pH", f"{ph_temp_pred['opt_ph']:.1f}")
+                    with col_temp:
+                        st.metric("最适温度", f"{ph_temp_pred['opt_temp']:.0f} °C")
+
+                # Subcellular localization results row
+                if subcellular_pred is not None:
+                    sub_label_str = _fmt_label_probs(subcellular_pred["subcellular_pred"], max_items=3)
+                    st.metric("亚细胞定位", sub_label_str)
 
                 st.caption(f"新版估计 kcat ≈ {blend_kcat:.3e}")
                 if ligase_mt is not None:
@@ -835,9 +1347,12 @@ def main():
 
                 lcol, rcol = st.columns([1, 1])
                 with lcol:
-                    st.markdown("#### 多维性能雷达图")
+                    st.markdown("#### 功能画像雷达图")
                     fig = render_radar(legacy, blend_log_kcat)
                     st.pyplot(fig, use_container_width=True)
+                    st.caption("雷达图仅展示功能相关维度：Ligase、Solubility、Cofactor 置信度，以及归一化后的 log_kcat。")
+                    st.markdown("#### 反应条件面板")
+                    render_condition_panel(ph_temp_pred)
                 with rcol:
                     st.markdown("#### AI 决策建议")
                     lig = legacy["ligase_prob"]
@@ -859,6 +1374,11 @@ def main():
                         st.info(f"金属依赖建议：{_fmt_label_probs(ligase_mt['metal_pred'])}")
                         if ligase_mt.get("metal_presence_prob") is not None:
                             st.info(f"金属依赖存在概率：{ligase_mt['metal_presence_prob']*100:.1f}%")
+                    if ph_temp_pred is not None:
+                        st.info(f"最适 pH 预测：{ph_temp_pred['opt_ph']:.1f}")
+                        st.info(f"最适温度预测：{ph_temp_pred['opt_temp']:.0f} °C")
+                    if subcellular_pred is not None:
+                        st.info(f"亚细胞定位预测：{_fmt_label_probs(subcellular_pred['subcellular_pred'])}")
 
                 st.markdown("#### 综合结果表")
                 merged = {
@@ -879,6 +1399,11 @@ def main():
                     merged["substrate_pred"] = json.dumps(ligase_mt["substrate_pred"], ensure_ascii=False)
                     merged["metal_pred"] = json.dumps(ligase_mt["metal_pred"], ensure_ascii=False)
                     merged["metal_presence_prob"] = ligase_mt.get("metal_presence_prob", np.nan)
+                if ph_temp_pred is not None:
+                    merged["opt_ph"] = ph_temp_pred["opt_ph"]
+                    merged["opt_temp"] = ph_temp_pred["opt_temp"]
+                if subcellular_pred is not None:
+                    merged["subcellular_pred"] = json.dumps(subcellular_pred["subcellular_pred"], ensure_ascii=False)
                 st.dataframe([merged], use_container_width=True)
             except Exception as e:
                 st.error(str(e))

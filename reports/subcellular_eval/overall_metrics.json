@@ -1,0 +1,29 @@
+{
+  "threshold": 0.7499999999999999,
+  "micro_f1": 0.8788128606760099,
+  "macro_f1": 0.48246180292335306,
+  "samples_f1": 0.9024761904761904,
+  "hamming_loss": 0.025454545454545455,
+  "exact_match_ratio": 0.8285714285714286,
+  "label_cardinality_true": 1.1466666666666667,
+  "label_cardinality_pred": 1.1638095238095238,
+  "mean_jaccard": 0.8844444444444445,
+  "n_total_rows": 4652,
+  "n_validation_rows": 931,
+  "n_validation_sequences_used": 931,
+  "n_validation_labeled_rows": 525,
+  "num_labels": 11,
+  "labels": [
+    "Cell membrane",
+    "Cell wall",
+    "Chloroplast",
+    "Chromosome",
+    "Cytoplasm",
+    "Cytoskeleton",
+    "Endoplasmic reticulum",
+    "Extracellular/Secreted",
+    "Golgi apparatus",
+    "Mitochondrion",
+    "Nucleus"
+  ]
+}

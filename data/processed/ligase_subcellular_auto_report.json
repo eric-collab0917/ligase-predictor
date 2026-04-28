@@ -1,0 +1,26 @@
+{
+  "total_entries": 4652,
+  "total_with_subcellular": 2625,
+  "total_with_ec": 4641,
+  "label_counts": {
+    "Cytoplasm": 2138,
+    "Mitochondrion": 382,
+    "Cell membrane": 155,
+    "Nucleus": 141,
+    "Chloroplast": 86,
+    "Cytoskeleton": 41,
+    "Endoplasmic reticulum": 38,
+    "Extracellular/Secreted": 19,
+    "Chromosome": 6,
+    "Cell wall": 4,
+    "Golgi apparatus": 2
+  },
+  "ec_subclass_counts": {
+    "6.3": 2745,
+    "6.1": 1143,
+    "6.2": 459,
+    "6.5": 218,
+    "6.4": 60,
+    "6.6": 16
+  }
+}
