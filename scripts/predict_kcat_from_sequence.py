@@ -31,6 +31,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import joblib
+
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+
 from transformers import AutoTokenizer, AutoModel
 
 
@@ -195,8 +200,24 @@ def load_topology_priors(feature_cache_path: str):
 
 
 def load_esm(model_name: str, device: torch.device):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
+    # Prefer local cache first; fall back to online fetch.
+    local_err = None
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        model = AutoModel.from_pretrained(model_name, local_files_only=True)
+    except Exception as e:
+        local_err = e
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModel.from_pretrained(model_name)
+        except Exception as online_err:
+            raise RuntimeError(
+                f"Failed to load ESM model '{model_name}'. "
+                "Network to Hugging Face may be unstable. "
+                "Try pre-downloading model files or switch to a smaller model "
+                "(e.g. facebook/esm2_t6_8M_UR50D). "
+                f"local_error={local_err} online_error={online_err}"
+            ) from online_err
     model.eval()
     model.to(device)
     return tokenizer, model
